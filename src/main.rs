@@ -4,7 +4,8 @@ mod server;
 mod store;
 
 use crate::bombastic::BombasticSource;
-use crate::{server::ServerConfig, store::Store};
+use crate::server::ServerConfig;
+use crate::store::image_store;
 use k8s_openapi::api::core::v1::Pod;
 use kube::{runtime::watcher, Api, Client};
 use tracing::info;
@@ -28,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("BOMBASTIC_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
     let source = BombasticSource::new(url.parse()?);
 
-    let (store, runner) = Store::new(stream);
+    let (store, runner) = image_store(stream);
 
     {
         let store = store.clone();

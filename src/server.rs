@@ -1,5 +1,7 @@
+use crate::api::{ImageRef, ImageState, PodRef};
 use crate::store::Store;
 use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
+use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
@@ -7,8 +9,15 @@ pub struct ServerConfig {
 }
 
 #[get("/v1/images")]
-async fn get_containers(store: web::Data<Store>) -> impl Responder {
-    HttpResponse::Ok().json(store.get_containers_all().await)
+async fn get_containers(store: web::Data<Store<ImageRef, PodRef, ()>>) -> impl Responder {
+    HttpResponse::Ok().json(
+        store
+            .get_state()
+            .await
+            .into_iter()
+            .map(|(k, v)| (k, ImageState { pods: v.owners }))
+            .collect::<HashMap<_, _>>(),
+    )
 }
 
 /*
@@ -18,7 +27,7 @@ async fn get_containers_ns(path: web::Path<String>, store: web::Data<Store>) -> 
     HttpResponse::Ok().json(store.get_containers_ns(&ns).await)
 }*/
 
-pub async fn run(config: ServerConfig, store: Store) -> anyhow::Result<()> {
+pub async fn run(config: ServerConfig, store: Store<ImageRef, PodRef, ()>) -> anyhow::Result<()> {
     let store = web::Data::new(store);
 
     HttpServer::new(move || {
