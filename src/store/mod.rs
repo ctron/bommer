@@ -21,9 +21,10 @@ pub struct Store {
 
 #[derive(Clone, Debug)]
 pub enum Event {
-    Added(ImageRef),
+    Added(ImageRef, ImageState),
+    Modified(ImageRef, ImageState),
     Removed(ImageRef),
-    Restart(HashSet<ImageRef>),
+    Restart(HashMap<ImageRef, ImageState>),
 }
 
 #[derive(Default)]
@@ -65,13 +66,20 @@ impl Inner {
         for image in &images {
             match self.images.entry(image.clone()) {
                 Entry::Vacant(entry) => {
-                    entry.insert(ImageState {
+                    let state = ImageState {
                         pods: HashSet::from_iter([pod_ref.clone()]),
-                    });
-                    self.broadcast(Event::Added(image.clone())).await;
+                    };
+                    entry.insert(state.clone());
+                    self.broadcast(Event::Added(image.clone(), state)).await;
                 }
                 Entry::Occupied(mut entry) => {
-                    entry.get_mut().pods.insert(pod_ref.clone());
+                    let state = entry.get_mut();
+                    let added = state.pods.insert(pod_ref.clone());
+                    let state = state.clone();
+
+                    if added {
+                        self.broadcast(Event::Modified(image.clone(), state)).await;
+                    }
                 }
             }
         }
@@ -91,6 +99,9 @@ impl Inner {
                     if state.pods.is_empty() {
                         self.images.remove(&image);
                         self.broadcast(Event::Removed(image)).await;
+                    } else {
+                        let state = state.clone();
+                        self.broadcast(Event::Modified(image, state)).await;
                     }
                 }
             }
@@ -103,11 +114,9 @@ impl Inner {
         images: HashMap<ImageRef, ImageState>,
         pods: HashMap<PodRef, HashSet<ImageRef>>,
     ) {
-        let keys = images.keys().cloned().collect::<HashSet<_>>();
-
-        self.images = images;
+        self.images = images.clone();
         self.pods = pods;
-        self.broadcast(Event::Restart(keys)).await;
+        self.broadcast(Event::Restart(images)).await;
     }
 
     fn get_state(&self) -> HashMap<ImageRef, ImageState> {
@@ -119,7 +128,7 @@ impl Inner {
 
         // we can "unwrap" here, as we just created the channel and are in control of the two
         // possible error conditions (full, no receiver).
-        tx.try_send(Event::Restart(self.images.keys().cloned().collect()))
+        tx.try_send(Event::Restart(self.images.clone()))
             .expect("Channel must have enough capacity");
 
         let id = loop {
