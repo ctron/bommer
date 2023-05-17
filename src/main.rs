@@ -1,5 +1,6 @@
 mod api;
 mod bombastic;
+mod pubsub;
 mod server;
 mod store;
 
@@ -44,6 +45,12 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // SBOM scanner
+
+    let (map, runner2) = bombastic::store(store.clone(), source);
+
+    // server
+
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "[::]:8080".to_string());
 
     info!("Binding to {bind_addr}");
@@ -55,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::select! {
         _ = server => {},
         _ = runner => {},
+        _ = runner2 => {},
     }
 
     Ok(())

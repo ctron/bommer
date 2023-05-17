@@ -16,7 +16,7 @@ pub enum Error {
     Request(#[from] reqwest::Error),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SBOM {
     pub data: String,
 }

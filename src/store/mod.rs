@@ -1,9 +1,7 @@
 mod pods;
-mod pubsub;
 
-use crate::store::pubsub::Event;
+use crate::pubsub::{Event, Subscription};
 use futures::{stream, StreamExt};
-use pubsub::Subscription;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -70,7 +68,79 @@ where
     pods: HashMap<O, HashSet<K>>,
 
     /// listeners
-    listeners: HashMap<uuid::Uuid, mpsc::Sender<Event<K, O, V>>>,
+    listeners: Listeners<K, State<O, V>>,
+}
+
+pub struct Listeners<K, V>
+where
+    K: Clone + Debug + Eq + Hash,
+    V: Clone + Debug,
+{
+    /// listeners
+    listeners: HashMap<uuid::Uuid, mpsc::Sender<Event<K, V>>>,
+}
+
+impl<K, V> Listeners<K, V>
+where
+    K: Clone + Debug + Eq + Hash,
+    V: Clone + Debug,
+{
+    async fn broadcast(&mut self, evt: Event<K, V>) {
+        let listeners = stream::iter(&self.listeners);
+        let listeners = listeners.map(|(id, l)| {
+            let evt = evt.clone();
+            async move {
+                if let Err(_) = l.send(evt).await {
+                    Some(*id)
+                } else {
+                    None
+                }
+            }
+        });
+        let failed: Vec<uuid::Uuid> = listeners
+            .buffer_unordered(10)
+            .filter_map(|s| async move { s })
+            .collect()
+            .await;
+
+        // remove failed subscribers
+
+        for id in failed {
+            debug!(?id, "Removing failed listener");
+            self.listeners.remove(&id);
+        }
+    }
+
+    fn subscribe(&mut self) -> (uuid::Uuid, mpsc::Receiver<Event<K, V>>) {
+        let (tx, rx) = mpsc::channel(16);
+
+        // we can "unwrap" here, as we just created the channel and are in control of the two
+        // possible error conditions (full, no receiver).
+        tx.try_send(Event::Restart(self.images.clone()))
+            .expect("Channel must have enough capacity");
+
+        let id = loop {
+            let id = uuid::Uuid::new_v4();
+            if let Entry::Vacant(entry) = self.listeners.entry(id) {
+                entry.insert(tx);
+                break id;
+            }
+        };
+
+        (id, rx)
+    }
+}
+
+impl<K, V> Default for Listeners<K, V>
+where
+    K: Clone + Debug + Eq + Hash,
+    V: Clone + Debug,
+{
+    fn default() -> Self {
+        Self {
+            listeners: Default::default(),
+        }
+    }
 }
 
 impl<K, O, V> Default for Inner<K, O, V>
@@ -121,7 +191,9 @@ where
                         state: initial(image),
                     };
                     entry.insert(state.clone());
-                    self.broadcast(Event::Added(image.clone(), state)).await;
+                    self.listeners
+                        .broadcast(Event::Added(image.clone(), state))
+                        .await;
                 }
                 Entry::Occupied(mut entry) => {
                     let state = entry.get_mut();
@@ -131,7 +203,9 @@ where
 
                     if added {
                         let state = state.clone();
-                        self.broadcast(Event::Modified(image.clone(), state)).await;
+                        self.listeners
+                            .broadcast(Event::Modified(image.clone(), state))
+                            .await;
                     }
                 }
             }
@@ -154,11 +228,13 @@ where
                     state.owners.remove(pod_ref);
                     if state.owners.is_empty() {
                         self.images.remove(&image);
-                        self.broadcast(Event::Removed(image)).await;
+                        self.listeners.broadcast(Event::Removed(image)).await;
                     } else {
                         state.state = apply(&image, state.state.clone());
                         let state = state.clone();
-                        self.broadcast(Event::Modified(image, state)).await;
+                        self.listeners
+                            .broadcast(Event::Modified(image, state))
+                            .await;
                     }
                 }
             }
@@ -169,14 +245,14 @@ where
     async fn reset(&mut self, images: HashMap<K, State<O, V>>, pods: HashMap<O, HashSet<K>>) {
         self.images = images.clone();
         self.pods = pods;
-        self.broadcast(Event::Restart(images)).await;
+        self.listeners.broadcast(Event::Restart(images)).await;
     }
 
     fn get_state(&self) -> HashMap<K, State<O, V>> {
         self.images.clone()
     }
 
-    fn subscribe(&mut self) -> (uuid::Uuid, mpsc::Receiver<Event<K, O, V>>) {
+    fn subscribe(&mut self) -> (uuid::Uuid, mpsc::Receiver<Event<K, State<O, V>>>) {
         let (tx, rx) = mpsc::channel(16);
 
         // we can "unwrap" here, as we just created the channel and are in control of the two
@@ -194,32 +270,6 @@ where
 
         (id, rx)
     }
-
-    async fn broadcast(&mut self, evt: Event<K, O, V>) {
-        let listeners = stream::iter(&self.listeners);
-        let listeners = listeners.map(|(id, l)| {
-            let evt = evt.clone();
-            async move {
-                if let Err(_) = l.send(evt).await {
-                    Some(*id)
-                } else {
-                    None
-                }
-            }
-        });
-        let failed: Vec<uuid::Uuid> = listeners
-            .buffer_unordered(10)
-            .filter_map(|s| async move { s })
-            .collect()
-            .await;
-
-        // remove failed subscribers
-
-        for id in failed {
-            debug!(?id, "Removing failed listener");
-            self.listeners.remove(&id);
-        }
-    }
 }
 
 impl<K, O, V> Store<K, O, V>
@@ -232,8 +282,13 @@ where
         self.inner.read().await.get_state()
     }
 
-    pub async fn subscribe(&self) -> Subscription<K, O, V> {
+    pub async fn subscribe(&self) -> Subscription<K, State<O, V>> {
         let (id, rx) = self.inner.write().await.subscribe();
-        Subscription::new(id, rx, self.inner.clone())
+        let store = self.inner.clone();
+        Subscription::new(rx, move || {
+            tokio::spawn(async move {
+                store.write().await.listeners.remove(&id);
+            });
+        })
     }
 }
