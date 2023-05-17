@@ -1,21 +1,18 @@
+mod pods;
 mod pubsub;
 
-use crate::api::{ImageRef, PodRef};
 use crate::store::pubsub::Event;
-use futures::{stream, Stream, StreamExt, TryStreamExt};
-use k8s_openapi::api::core::v1::{ContainerStatus, Pod};
-use kube::runtime::watcher;
-use kube::{Resource, ResourceExt};
+use futures::{stream, StreamExt};
 use pubsub::Subscription;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::future::Future;
 use std::hash::Hash;
-use std::pin::pin;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::debug;
+
+pub use pods::image_store;
 
 #[derive(Clone)]
 pub struct Store<K, O, V>
@@ -25,6 +22,19 @@ where
     V: Clone + Debug,
 {
     inner: Arc<RwLock<Inner<K, O, V>>>,
+}
+
+impl<K, O, V> Default for Store<K, O, V>
+where
+    K: Clone + Debug + Eq + Hash,
+    O: Clone + Debug + Eq + Hash,
+    V: Clone + Debug,
+{
+    fn default() -> Self {
+        Self {
+            inner: Default::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -212,24 +222,6 @@ where
     }
 }
 
-pub fn image_store<S>(
-    stream: S,
-) -> (
-    Store<ImageRef, PodRef, ()>,
-    impl Future<Output = anyhow::Result<()>>,
-)
-where
-    S: Stream<Item = Result<watcher::Event<Pod>, watcher::Error>>,
-{
-    let inner = Arc::new(RwLock::new(Inner::default()));
-    let runner = {
-        let inner = inner.clone();
-        async move { run(inner, stream).await }
-    };
-
-    (Store { inner }, runner)
-}
-
 impl<K, O, V> Store<K, O, V>
 where
     K: Clone + Debug + Eq + Hash + Send + Sync + 'static,
@@ -244,115 +236,4 @@ where
         let (id, rx) = self.inner.write().await.subscribe();
         Subscription::new(id, rx, self.inner.clone())
     }
-}
-
-async fn run<S>(inner: Arc<RwLock<Inner<ImageRef, PodRef, ()>>>, stream: S) -> anyhow::Result<()>
-where
-    S: Stream<Item = Result<watcher::Event<Pod>, watcher::Error>>,
-{
-    let mut stream = pin!(stream);
-
-    while let Some(evt) = stream.try_next().await? {
-        match evt {
-            watcher::Event::Applied(pod) => {
-                let pod_ref = match to_key(&pod) {
-                    Some(pod_ref) => pod_ref,
-                    None => continue,
-                };
-
-                let images = images_from_pod(pod);
-
-                inner
-                    .write()
-                    .await
-                    .apply(pod_ref, images, |_| (), |_, v| v)
-                    .await;
-            }
-            watcher::Event::Deleted(pod) => {
-                if let Some(pod_ref) = to_key(&pod) {
-                    inner.write().await.delete(&pod_ref, |_, v| v).await;
-                }
-            }
-            watcher::Event::Restarted(pods) => {
-                let (images, pods) = to_state(pods);
-                inner.write().await.reset(images, pods).await;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn to_state(
-    pods: Vec<Pod>,
-) -> (
-    HashMap<ImageRef, State<PodRef, ()>>,
-    HashMap<PodRef, HashSet<ImageRef>>,
-) {
-    let mut by_images: HashMap<ImageRef, State<PodRef, ()>> = Default::default();
-    let mut by_pods = HashMap::new();
-
-    for pod in pods {
-        let pod_ref = match to_key(&pod) {
-            Some(pod_ref) => pod_ref,
-            None => continue,
-        };
-
-        let images = images_from_pod(pod);
-        for image in &images {
-            by_images
-                .entry(image.clone())
-                .or_default()
-                .owners
-                .insert(pod_ref.clone());
-        }
-
-        by_pods.insert(pod_ref, images);
-    }
-
-    (by_images, by_pods)
-}
-
-/// create a key for a pod
-fn to_key(pod: &Pod) -> Option<PodRef> {
-    match (pod.namespace(), pod.meta().name.clone()) {
-        (Some(namespace), Some(name)) => Some(PodRef { namespace, name }),
-        _ => None,
-    }
-}
-
-/// collect all container images from a pod
-fn images_from_pod(pod: Pod) -> HashSet<ImageRef> {
-    pod.status
-        .into_iter()
-        .flat_map(|s| {
-            s.container_statuses
-                .into_iter()
-                .flat_map(|c| c.into_iter().flat_map(to_container_id))
-                .chain(
-                    s.init_container_statuses
-                        .into_iter()
-                        .flat_map(|ic| ic.into_iter().flat_map(to_container_id)),
-                )
-                .chain(
-                    s.ephemeral_container_statuses
-                        .into_iter()
-                        .flat_map(|ic| ic.into_iter().flat_map(to_container_id)),
-                )
-        })
-        .collect()
-}
-
-pub fn to_container_id(container: ContainerStatus) -> Option<ImageRef> {
-    if container.image_id.is_empty() {
-        return None;
-    }
-
-    // FIXME: we need some more magic here, as kubernetes has weird ideas on filling the fields image and imageId.
-    // see: docs/image_id.md
-
-    // FIXME: this won't work on kind, and maybe others, as they generate broken image ID values
-    Some(ImageRef(container.image_id))
-
-    // ImageRef(format!("{} / {}", container.image, container.image_id))
 }
