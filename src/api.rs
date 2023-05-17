@@ -1,5 +1,5 @@
-use std::collections::{HashMap, HashSet};
-use std::ops::{Deref, DerefMut};
+use std::collections::HashSet;
+use std::ops::Deref;
 
 #[derive(
     Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, serde::Deserialize, serde::Serialize,
@@ -28,38 +28,4 @@ pub struct PodRef {
 #[serde(rename_all = "camelCase")]
 pub struct ImageState {
     pub pods: HashSet<PodRef>,
-}
-
-#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
-pub struct ImagesByNamespace(pub HashMap<String, Images>);
-
-impl Deref for ImagesByNamespace {
-    type Target = HashMap<String, Images>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for ImagesByNamespace {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
-pub struct Images(pub HashMap<ImageRef, ImageState>);
-
-impl Deref for Images {
-    type Target = HashMap<ImageRef, ImageState>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for Images {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
 }

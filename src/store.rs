@@ -1,4 +1,4 @@
-use crate::api::{ImageRef, ImageState, Images, PodRef};
+use crate::api::{ImageRef, ImageState, PodRef};
 use futures::{stream, Stream, StreamExt, TryStreamExt};
 use k8s_openapi::api::core::v1::{ContainerStatus, Pod};
 use kube::runtime::watcher;
@@ -27,7 +27,7 @@ pub enum Event {
 #[derive(Default)]
 struct Inner {
     /// Discovered images
-    images: Images,
+    images: HashMap<ImageRef, ImageState>,
 
     /// pods, with their images
     ///
@@ -127,7 +127,11 @@ impl Inner {
     }
 
     /// full reset of the state
-    async fn reset(&mut self, images: Images, pods: HashMap<PodRef, HashSet<ImageRef>>) {
+    async fn reset(
+        &mut self,
+        images: HashMap<ImageRef, ImageState>,
+        pods: HashMap<PodRef, HashSet<ImageRef>>,
+    ) {
         let keys = images.keys().cloned().collect::<HashSet<_>>();
 
         self.images = images;
@@ -135,7 +139,7 @@ impl Inner {
         self.broadcast(Event::Restart(keys)).await;
     }
 
-    fn get_state(&self) -> Images {
+    fn get_state(&self) -> HashMap<ImageRef, ImageState> {
         self.images.clone()
     }
 
@@ -199,7 +203,7 @@ impl Store {
         (Self { inner }, runner)
     }
 
-    pub async fn get_containers_all(&self) -> Images {
+    pub async fn get_containers_all(&self) -> HashMap<ImageRef, ImageState> {
         self.inner.read().await.get_state()
     }
 
@@ -239,8 +243,13 @@ where
     Ok(())
 }
 
-fn to_state(pods: Vec<Pod>) -> (Images, HashMap<PodRef, HashSet<ImageRef>>) {
-    let mut by_images: Images = Default::default();
+fn to_state(
+    pods: Vec<Pod>,
+) -> (
+    HashMap<ImageRef, ImageState>,
+    HashMap<PodRef, HashSet<ImageRef>>,
+) {
+    let mut by_images: HashMap<ImageRef, ImageState> = Default::default();
     let mut by_pods = HashMap::new();
 
     for pod in pods {
