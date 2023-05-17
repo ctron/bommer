@@ -1,12 +1,14 @@
+mod pubsub;
+
 use crate::api::{ImageRef, ImageState, PodRef};
 use futures::{stream, Stream, StreamExt, TryStreamExt};
 use k8s_openapi::api::core::v1::{ContainerStatus, Pod};
 use kube::runtime::watcher;
 use kube::{Resource, ResourceExt};
+use pubsub::Subscription;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::ops::{Deref, DerefMut};
 use std::pin::pin;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -25,7 +27,7 @@ pub enum Event {
 }
 
 #[derive(Default)]
-struct Inner {
+pub struct Inner {
     /// Discovered images
     images: HashMap<ImageRef, ImageState>,
 
@@ -36,37 +38,6 @@ struct Inner {
 
     /// listeners
     listeners: HashMap<uuid::Uuid, mpsc::Sender<Event>>,
-}
-
-pub struct Subscription {
-    id: Option<uuid::Uuid>,
-    rx: mpsc::Receiver<Event>,
-    store: Arc<RwLock<Inner>>,
-}
-
-impl Drop for Subscription {
-    fn drop(&mut self) {
-        if let Some(id) = self.id.take() {
-            let store = self.store.clone();
-            tokio::spawn(async move {
-                store.write().await.listeners.remove(&id);
-            });
-        }
-    }
-}
-
-impl Deref for Subscription {
-    type Target = mpsc::Receiver<Event>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.rx
-    }
-}
-
-impl DerefMut for Subscription {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.rx
-    }
 }
 
 impl Inner {
@@ -207,13 +178,9 @@ impl Store {
         self.inner.read().await.get_state()
     }
 
-    pub async fn subscribe(&self) -> Subscription {
+    pub async fn subscribe(&self) -> Subscription<Event> {
         let (id, rx) = self.inner.write().await.subscribe();
-        Subscription {
-            store: self.inner.clone(),
-            id: Some(id),
-            rx,
-        }
+        Subscription::new(id, rx, self.inner.clone())
     }
 }
 
