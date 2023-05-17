@@ -1,31 +1,72 @@
-use crate::api::{ImageRef, Images, ImagesByNamespace, PodRef};
-use crate::bombastic::BombasticSource;
-use futures::{Stream, TryStreamExt};
+use crate::api::{ImageRef, ImageState, Images, PodRef};
+use futures::{stream, Stream, StreamExt, TryStreamExt};
 use k8s_openapi::api::core::v1::{ContainerStatus, Pod};
 use kube::runtime::watcher;
 use kube::{Resource, ResourceExt};
-use parking_lot::RwLock;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::ops::{Deref, DerefMut};
 use std::pin::pin;
 use std::sync::Arc;
+use tokio::sync::{mpsc, RwLock};
+use tracing::debug;
 
 #[derive(Clone)]
 pub struct Store {
     inner: Arc<RwLock<Inner>>,
 }
 
+#[derive(Clone, Debug)]
+pub enum Event {
+    Added(ImageRef),
+    Removed(ImageRef),
+    Restart(HashSet<ImageRef>),
+}
+
 #[derive(Default)]
 struct Inner {
-    /// images (by namespace), and which pods use them.
-    ///
-    /// This is the main structure of data we hold.
-    images: ImagesByNamespace,
+    /// Discovered images
+    images: Images,
 
     /// pods, with their images
     ///
     /// This is mainly needed to figure out how to clean up a pod which got removed.
     pods: HashMap<PodRef, HashSet<ImageRef>>,
+
+    /// listeners
+    listeners: HashMap<uuid::Uuid, mpsc::Sender<Event>>,
+}
+
+pub struct Subscription {
+    id: Option<uuid::Uuid>,
+    rx: mpsc::Receiver<Event>,
+    store: Arc<RwLock<Inner>>,
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        if let Some(id) = self.id.take() {
+            let store = self.store.clone();
+            tokio::spawn(async move {
+                store.write().await.listeners.remove(&id);
+            });
+        }
+    }
+}
+
+impl Deref for Subscription {
+    type Target = mpsc::Receiver<Event>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.rx
+    }
+}
+
+impl DerefMut for Subscription {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.rx
+    }
 }
 
 impl Inner {
@@ -51,13 +92,17 @@ impl Inner {
 
         // add images
         for image in &images {
-            self.images
-                .entry(pod_ref.namespace.clone())
-                .or_default()
-                .entry(image.clone())
-                .or_default()
-                .pods
-                .insert(pod_ref.clone());
+            match self.images.entry(image.clone()) {
+                Entry::Vacant(entry) => {
+                    entry.insert(ImageState {
+                        pods: HashSet::from_iter([pod_ref.clone()]),
+                    });
+                    self.broadcast(Event::Added(image.clone())).await;
+                }
+                Entry::Occupied(mut entry) => {
+                    entry.get_mut().pods.insert(pod_ref.clone());
+                }
+            }
         }
 
         // add pod
@@ -70,15 +115,11 @@ impl Inner {
             // we removed a pod, so let's clean up its images
 
             for image in images {
-                if let Some(ns_images) = self.images.get_mut(&pod_ref.namespace) {
-                    if let Some(state) = ns_images.get_mut(&image) {
-                        state.pods.remove(pod_ref);
-                        if state.pods.is_empty() {
-                            ns_images.remove(&image);
-                            if ns_images.is_empty() {
-                                self.images.remove(&pod_ref.namespace);
-                            }
-                        }
+                if let Some(state) = self.images.get_mut(&image) {
+                    state.pods.remove(pod_ref);
+                    if state.pods.is_empty() {
+                        self.images.remove(&image);
+                        self.broadcast(Event::Removed(image)).await;
                     }
                 }
             }
@@ -86,26 +127,66 @@ impl Inner {
     }
 
     /// full reset of the state
-    async fn reset(&mut self, images: ImagesByNamespace, pods: HashMap<PodRef, HashSet<ImageRef>>) {
+    async fn reset(&mut self, images: Images, pods: HashMap<PodRef, HashSet<ImageRef>>) {
+        let keys = images.keys().cloned().collect::<HashSet<_>>();
+
         self.images = images;
         self.pods = pods;
+        self.broadcast(Event::Restart(keys)).await;
     }
 
-    /// get the containers for a namespace
-    async fn get_containers_ns(&self, namespace: &str) -> Images {
-        self.images.get(namespace).cloned().unwrap_or_default()
-    }
-
-    async fn get_containers_all(&self) -> ImagesByNamespace {
+    fn get_state(&self) -> Images {
         self.images.clone()
+    }
+
+    fn subscribe(&mut self) -> (uuid::Uuid, mpsc::Receiver<Event>) {
+        let (tx, rx) = mpsc::channel(16);
+
+        // we can "unwrap" here, as we just created the channel and are in control of the two
+        // possible error conditions (full, no receiver).
+        tx.try_send(Event::Restart(self.images.keys().cloned().collect()))
+            .expect("Channel must have enough capacity");
+
+        let id = loop {
+            let id = uuid::Uuid::new_v4();
+            if let Entry::Vacant(entry) = self.listeners.entry(id) {
+                entry.insert(tx);
+                break id;
+            }
+        };
+
+        (id, rx)
+    }
+
+    async fn broadcast(&mut self, evt: Event) {
+        let listeners = stream::iter(&self.listeners);
+        let listeners = listeners.map(|(id, l)| {
+            let evt = evt.clone();
+            async move {
+                if let Err(_) = l.send(evt).await {
+                    Some(*id)
+                } else {
+                    None
+                }
+            }
+        });
+        let failed: Vec<uuid::Uuid> = listeners
+            .buffer_unordered(10)
+            .filter_map(|s| async move { s })
+            .collect()
+            .await;
+
+        // remove failed subscribers
+
+        for id in failed {
+            debug!(?id, "Removing failed listener");
+            self.listeners.remove(&id);
+        }
     }
 }
 
 impl Store {
-    pub fn new<S>(
-        stream: S,
-        source: BombasticSource,
-    ) -> (Self, impl Future<Output = anyhow::Result<()>>)
+    pub fn new<S>(stream: S) -> (Self, impl Future<Output = anyhow::Result<()>>)
     where
         S: Stream<Item = Result<watcher::Event<Pod>, watcher::Error>>,
     {
@@ -118,12 +199,17 @@ impl Store {
         (Self { inner }, runner)
     }
 
-    pub async fn get_containers_all(&self) -> ImagesByNamespace {
-        self.inner.read().get_containers_all().await
+    pub async fn get_containers_all(&self) -> Images {
+        self.inner.read().await.get_state()
     }
 
-    pub async fn get_containers_ns(&self, namespace: &str) -> Images {
-        self.inner.read().get_containers_ns(namespace).await
+    pub async fn subscribe(&self) -> Subscription {
+        let (id, rx) = self.inner.write().await.subscribe();
+        Subscription {
+            store: self.inner.clone(),
+            id: Some(id),
+            rx,
+        }
     }
 }
 
@@ -136,16 +222,16 @@ where
     while let Some(evt) = stream.try_next().await? {
         match evt {
             watcher::Event::Applied(pod) => {
-                inner.write().apply(pod).await;
+                inner.write().await.apply(pod).await;
             }
             watcher::Event::Deleted(pod) => {
                 if let Some(pod_ref) = to_key(&pod) {
-                    inner.write().delete(&pod_ref).await;
+                    inner.write().await.delete(&pod_ref).await;
                 }
             }
             watcher::Event::Restarted(pods) => {
                 let (images, pods) = to_state(pods);
-                inner.write().reset(images, pods).await;
+                inner.write().await.reset(images, pods).await;
             }
         }
     }
@@ -153,8 +239,8 @@ where
     Ok(())
 }
 
-fn to_state(pods: Vec<Pod>) -> (ImagesByNamespace, HashMap<PodRef, HashSet<ImageRef>>) {
-    let mut by_images: ImagesByNamespace = Default::default();
+fn to_state(pods: Vec<Pod>) -> (Images, HashMap<PodRef, HashSet<ImageRef>>) {
+    let mut by_images: Images = Default::default();
     let mut by_pods = HashMap::new();
 
     for pod in pods {
@@ -166,8 +252,6 @@ fn to_state(pods: Vec<Pod>) -> (ImagesByNamespace, HashMap<PodRef, HashSet<Image
         let images = images_from_pod(pod);
         for image in &images {
             by_images
-                .entry(pod_ref.namespace.clone())
-                .or_default()
                 .entry(image.clone())
                 .or_default()
                 .pods
@@ -195,27 +279,31 @@ fn images_from_pod(pod: Pod) -> HashSet<ImageRef> {
         .flat_map(|s| {
             s.container_statuses
                 .into_iter()
-                .flat_map(|c| c.into_iter().map(to_container_id))
+                .flat_map(|c| c.into_iter().flat_map(to_container_id))
                 .chain(
                     s.init_container_statuses
                         .into_iter()
-                        .flat_map(|ic| ic.into_iter().map(to_container_id)),
+                        .flat_map(|ic| ic.into_iter().flat_map(to_container_id)),
                 )
                 .chain(
                     s.ephemeral_container_statuses
                         .into_iter()
-                        .flat_map(|ic| ic.into_iter().map(to_container_id)),
+                        .flat_map(|ic| ic.into_iter().flat_map(to_container_id)),
                 )
         })
         .collect()
 }
 
-pub fn to_container_id(container: ContainerStatus) -> ImageRef {
+pub fn to_container_id(container: ContainerStatus) -> Option<ImageRef> {
+    if container.image_id.is_empty() {
+        return None;
+    }
+
     // FIXME: we need some more magic here, as kubernetes has weird ideas on filling the fields image and imageId.
     // see: docs/image_id.md
 
     // FIXME: this won't work on kind, and maybe others, as they generate broken image ID values
-    ImageRef(container.image_id)
+    Some(ImageRef(container.image_id))
 
     // ImageRef(format!("{} / {}", container.image, container.image_id))
 }

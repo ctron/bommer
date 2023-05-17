@@ -28,7 +28,20 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("BOMBASTIC_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
     let source = BombasticSource::new(url.parse()?);
 
-    let (store, runner) = Store::new(stream, source);
+    let (store, runner) = Store::new(stream);
+
+    {
+        let store = store.clone();
+        tokio::spawn(async move {
+            loop {
+                info!("Starting event stream");
+                let mut sub = store.subscribe().await;
+                while let Some(evt) = sub.recv().await {
+                    info!("Event: {evt:?}");
+                }
+            }
+        });
+    }
 
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "[::]:8080".to_string());
 
