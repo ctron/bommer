@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
 
     let (store, runner) = image_store(stream);
 
-    {
+    if false {
         let store = store.clone();
         tokio::spawn(async move {
             loop {
@@ -48,6 +48,19 @@ async fn main() -> anyhow::Result<()> {
     // SBOM scanner
 
     let (map, runner2) = bombastic::store(store.clone(), source);
+
+    {
+        let map = map.clone();
+        tokio::spawn(async move {
+            loop {
+                info!("Starting SBOM stream");
+                let mut sub = map.subscribe().await;
+                while let Some(evt) = sub.recv().await {
+                    info!("Event: {evt:?}");
+                }
+            }
+        });
+    }
 
     // server
 

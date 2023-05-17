@@ -1,5 +1,5 @@
 use crate::api::{ImageRef, PodRef};
-use crate::store::{State, Store};
+use crate::store::{Owned, Store};
 use futures::{Stream, TryStreamExt};
 use k8s_openapi::api::core::v1::{ContainerStatus, Pod};
 use kube::{runtime::watcher, Resource, ResourceExt};
@@ -66,10 +66,10 @@ where
 fn to_state(
     pods: Vec<Pod>,
 ) -> (
-    HashMap<ImageRef, State<PodRef, ()>>,
+    HashMap<ImageRef, Owned<PodRef, ()>>,
     HashMap<PodRef, HashSet<ImageRef>>,
 ) {
-    let mut by_images: HashMap<ImageRef, State<PodRef, ()>> = Default::default();
+    let mut by_images: HashMap<ImageRef, Owned<PodRef, ()>> = Default::default();
     let mut by_pods = HashMap::new();
 
     for pod in pods {
