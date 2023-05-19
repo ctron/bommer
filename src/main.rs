@@ -1,4 +1,3 @@
-mod api;
 mod bombastic;
 mod pubsub;
 mod server;
@@ -7,6 +6,7 @@ mod store;
 use crate::bombastic::BombasticSource;
 use crate::server::ServerConfig;
 use crate::store::image_store;
+use futures::FutureExt;
 use k8s_openapi::api::core::v1::Pod;
 use kube::{runtime::watcher, Api, Client};
 use tracing::{info, warn};
@@ -73,11 +73,14 @@ async fn main() -> anyhow::Result<()> {
 
     let server = server::run(config, map);
 
-    tokio::select! {
-        _ = server => {},
-        _ = runner => {},
-        _ = runner2 => {},
-    }
+    let (result, _, _) = futures::future::select_all([
+        server.boxed_local(),
+        runner.boxed_local(),
+        runner2.boxed_local(),
+    ])
+    .await;
+
+    result?;
 
     Ok(())
 }

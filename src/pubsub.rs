@@ -106,8 +106,8 @@ where
     K: Clone + Debug + Eq + Hash,
     V: Clone + Debug + PartialEq,
 {
-    async fn broadcast(mut lock: impl DerefMut<Target = Self>, evt: Event<K, V>) {
-        let listeners = stream::iter(&lock.listeners);
+    async fn broadcast(&mut self, evt: Event<K, V>) {
+        let listeners = stream::iter(&self.listeners);
         let listeners = listeners.map(|(id, l)| {
             let evt = evt.clone();
             async move {
@@ -128,7 +128,7 @@ where
 
         for id in failed {
             debug!(?id, "Removing failed listener");
-            lock.listeners.remove(&id);
+            self.listeners.remove(&id);
         }
     }
 }
@@ -172,7 +172,7 @@ where
     pub async fn set_state(&self, state: HashMap<K, V>) {
         let mut lock = self.inner.write().await;
         lock.state = state.clone();
-        Inner::broadcast(lock, Event::Restart(state)).await;
+        Inner::broadcast(&mut lock, Event::Restart(state)).await;
     }
 
     pub async fn mutate_state<F>(&self, key: K, f: F)
@@ -207,9 +207,52 @@ where
         };
 
         if let Some(evt) = evt {
-            Inner::broadcast(lock, evt).await;
+            Inner::broadcast(&mut lock, evt).await;
         }
     }
+
+    pub async fn iter_mut<F>(&self, f: F)
+    where
+        F: Fn(&K, &V) -> Output<V>,
+    {
+        let mut lock = self.inner.write().await;
+
+        let mut ops = Vec::new();
+
+        for (k, v) in &mut lock.state {
+            match f(k, v) {
+                Output::Drop => {
+                    ops.push((k.clone(), None));
+                }
+                Output::Keep => {}
+                Output::Modify(state) => {
+                    if v != &state {
+                        ops.push((k.clone(), Some(state)));
+                    }
+                }
+            }
+        }
+
+        for (k, v) in ops.into_iter() {
+            match v {
+                None => {
+                    lock.state.remove(&k);
+                    Inner::broadcast(&mut lock, Event::Removed(k)).await;
+                }
+                Some(state) => {
+                    lock.state.insert(k.clone(), state.clone());
+                    Inner::broadcast(&mut lock, Event::Modified(k, state)).await;
+                }
+            }
+        }
+    }
+}
+
+#[allow(unused)]
+pub enum Output<T> {
+    Drop,
+    Keep,
+    Modify(T),
 }
 
 impl<K, V> Default for State<K, V>

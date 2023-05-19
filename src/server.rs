@@ -1,4 +1,5 @@
 use crate::bombastic::Map;
+use actix_cors::Cors;
 use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
 use std::collections::HashMap;
 
@@ -7,8 +8,8 @@ pub struct ServerConfig {
     pub bind_addr: String,
 }
 
-#[get("/v1/images")]
-async fn get_containers(map: web::Data<Map>) -> impl Responder {
+#[get("/api/v1/workload")]
+async fn get_workload(map: web::Data<Map>) -> impl Responder {
     HttpResponse::Ok().json(map.get_state().await.into_iter().collect::<HashMap<_, _>>())
 }
 
@@ -23,7 +24,17 @@ pub async fn run(config: ServerConfig, map: Map) -> anyhow::Result<()> {
     let map = web::Data::new(map);
 
     HttpServer::new(move || {
-        App::new().app_data(map.clone()).service(get_containers)
+        let cors = Cors::default()
+            .send_wildcard()
+            .allow_any_origin()
+            .allow_any_method()
+            .allow_any_header()
+            .max_age(3600);
+
+        App::new()
+            .app_data(map.clone())
+            .wrap(cors)
+            .service(get_workload)
         //.service(get_containers_ns)
     })
     .bind(&config.bind_addr)?

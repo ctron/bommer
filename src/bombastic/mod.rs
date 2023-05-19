@@ -1,10 +1,9 @@
-use crate::api::{ImageRef, PodRef};
-use crate::bombastic::client::SBOM;
-use crate::pubsub::{Event, State};
+use crate::pubsub::{Event, Output, State};
 use crate::store::Store;
 use anyhow::bail;
+use bommer_api::data::{Image, ImageRef, PodRef, SbomState, SBOM};
+use futures::FutureExt;
 use packageurl::PackageUrl;
-use std::collections::HashSet;
 use std::future::Future;
 use std::ops::Deref;
 use std::time::Duration;
@@ -12,22 +11,6 @@ use tracing::{info, warn};
 
 mod client;
 pub use client::BombasticSource;
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Image {
-    pub pods: HashSet<PodRef>,
-    pub sbom: SbomState,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum SbomState {
-    Scheduled,
-    Err(String),
-    Missing,
-    Found(SBOM),
-}
 
 #[derive(Clone, Debug, Default)]
 pub struct Map {
@@ -49,11 +32,14 @@ pub fn store(
     let map = Map::default();
 
     (map.clone(), async move {
-        tokio::select! {
-            _ = runner(store, map.clone()) => {},
-            _ = scanner(map, source) => {},
-        }
-        Ok(())
+        let (result, _, _) = futures::future::select_all([
+            runner(store, map.clone()).boxed_local(),
+            scanner(map.clone(), source).boxed_local(),
+            rescanner(map).boxed_local(),
+        ])
+        .await;
+
+        result
     })
 }
 
@@ -63,7 +49,7 @@ struct Scanner {
 }
 
 impl Scanner {
-    async fn lookup(&self, image: &ImageRef) -> Result<SBOM, anyhow::Error> {
+    async fn lookup(&self, image: &ImageRef) -> Result<Option<SBOM>, anyhow::Error> {
         if let Some((base, digest)) = image.0.rsplit_once('@') {
             if let Some(name) = base.split('/').last() {
                 let mut purl = PackageUrl::new("oci", name)?;
@@ -78,7 +64,8 @@ impl Scanner {
 
     async fn scan(&self, image: &ImageRef) {
         let state = match self.lookup(image).await {
-            Ok(result) => SbomState::Found(result),
+            Ok(Some(result)) => SbomState::Found(result),
+            Ok(None) => SbomState::Missing,
             Err(err) => SbomState::Err(err.to_string()),
         };
         self.map
@@ -92,6 +79,7 @@ impl Scanner {
     }
 }
 
+/// directly scan incoming changes
 async fn scanner(map: Map, source: BombasticSource) -> anyhow::Result<()> {
     let scanner = Scanner {
         map: map.clone(),
@@ -123,6 +111,23 @@ async fn scanner(map: Map, source: BombasticSource) -> anyhow::Result<()> {
         // lost subscription, delay and re-try
         warn!("Lost subscription");
         tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+/// periodically re-scan changes
+async fn rescanner(map: Map) -> anyhow::Result<()> {
+    loop {
+        tokio::time::sleep(Duration::from_secs(15)).await;
+
+        map.iter_mut(|_k, state| match &state.sbom {
+            SbomState::Err(_) | SbomState::Missing => {
+                let mut state = state.clone();
+                state.sbom = SbomState::Scheduled;
+                Output::Modify(state)
+            }
+            _ => Output::Keep,
+        })
+        .await;
     }
 }
 

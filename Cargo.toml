@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+actix-cors = "0.6"
 actix-web = "4"
 anyhow = "1"
 kube = { version = "0.82.2", features = ["runtime"] }
@@ -18,5 +19,14 @@ packageurl = "0.3.0"
 thiserror = "1"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
-
 k8s-openapi = { version = "0.18.0", features = ["v1_23"] }
+
+bommer-api = { path = "bommer-api" }
+
+[workspace]
+members = [
+    "bommer-api"
+]
+exclude = [
+    "spog"
+]

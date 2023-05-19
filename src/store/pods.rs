@@ -1,5 +1,5 @@
-use crate::api::{ImageRef, PodRef};
 use crate::store::{Owned, Store};
+use bommer_api::data::{ImageRef, PodRef};
 use futures::{Stream, TryStreamExt};
 use k8s_openapi::api::core::v1::{ContainerStatus, Pod};
 use kube::{runtime::watcher, Resource, ResourceExt};

@@ -1,5 +1,6 @@
+use bommer_api::data::SBOM;
 use packageurl::PackageUrl;
-use reqwest::Url;
+use reqwest::{StatusCode, Url};
 use url::ParseError;
 
 #[derive(Clone, Debug)]
@@ -16,11 +17,6 @@ pub enum Error {
     Request(#[from] reqwest::Error),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SBOM {
-    pub data: String,
-}
-
 impl BombasticSource {
     pub fn new(url: Url) -> Self {
         Self {
@@ -29,17 +25,23 @@ impl BombasticSource {
         }
     }
 
-    pub async fn lookup_sbom(&self, purl: PackageUrl<'_>) -> Result<SBOM, Error> {
+    pub async fn lookup_sbom(&self, purl: PackageUrl<'_>) -> Result<Option<SBOM>, Error> {
         let response = self
             .client
             .get(self.url.join("/api/v1/sbom")?)
             .query(&[("purl", purl.to_string())])
             .send()
-            .await?
-            .error_for_status()?;
+            .await?;
 
-        Ok(SBOM {
+        match response.status() {
+            StatusCode::NOT_FOUND => return Ok(None),
+            _ => {}
+        }
+
+        let response = response.error_for_status()?;
+
+        Ok(Some(SBOM {
             data: response.text().await?,
-        })
+        }))
     }
 }
