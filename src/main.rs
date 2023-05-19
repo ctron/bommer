@@ -9,7 +9,7 @@ use crate::server::ServerConfig;
 use crate::store::image_store;
 use k8s_openapi::api::core::v1::Pod;
 use kube::{runtime::watcher, Api, Client};
-use tracing::info;
+use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -58,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
                 while let Some(evt) = sub.recv().await {
                     info!("Event: {evt:?}");
                 }
+                warn!("Lost debug subscription");
             }
         });
     }
@@ -70,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = ServerConfig { bind_addr };
 
-    let server = server::run(config, store);
+    let server = server::run(config, map);
 
     tokio::select! {
         _ = server => {},

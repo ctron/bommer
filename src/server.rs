@@ -1,5 +1,4 @@
-use crate::api::{ImageRef, ImageState, PodRef};
-use crate::store::Store;
+use crate::bombastic::Map;
 use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
 use std::collections::HashMap;
 
@@ -9,15 +8,8 @@ pub struct ServerConfig {
 }
 
 #[get("/v1/images")]
-async fn get_containers(store: web::Data<Store<ImageRef, PodRef, ()>>) -> impl Responder {
-    HttpResponse::Ok().json(
-        store
-            .get_state()
-            .await
-            .into_iter()
-            .map(|(k, v)| (k, ImageState { pods: v.owners }))
-            .collect::<HashMap<_, _>>(),
-    )
+async fn get_containers(map: web::Data<Map>) -> impl Responder {
+    HttpResponse::Ok().json(map.get_state().await.into_iter().collect::<HashMap<_, _>>())
 }
 
 /*
@@ -27,11 +19,11 @@ async fn get_containers_ns(path: web::Path<String>, store: web::Data<Store>) -> 
     HttpResponse::Ok().json(store.get_containers_ns(&ns).await)
 }*/
 
-pub async fn run(config: ServerConfig, store: Store<ImageRef, PodRef, ()>) -> anyhow::Result<()> {
-    let store = web::Data::new(store);
+pub async fn run(config: ServerConfig, map: Map) -> anyhow::Result<()> {
+    let map = web::Data::new(map);
 
     HttpServer::new(move || {
-        App::new().app_data(store.clone()).service(get_containers)
+        App::new().app_data(map.clone()).service(get_containers)
         //.service(get_containers_ns)
     })
     .bind(&config.bind_addr)?

@@ -171,6 +171,7 @@ where
     O: Clone + Debug + Eq + Hash + Send + Sync + 'static,
     V: Clone + Debug + PartialEq + Send + Sync + 'static,
 {
+    #[allow(unused)]
     pub async fn get_state(&self) -> HashMap<K, Owned<O, V>> {
         self.inner.read().await.state.get_state().await
     }

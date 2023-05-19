@@ -5,6 +5,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
 use tracing::debug;
 
@@ -110,7 +111,7 @@ where
         let listeners = listeners.map(|(id, l)| {
             let evt = evt.clone();
             async move {
-                if let Err(_) = l.send(evt).await {
+                if let Err(_) = l.send_timeout(evt, Duration::from_secs(1)).await {
                     Some(*id)
                 } else {
                     None

@@ -1,10 +1,17 @@
 use std::collections::HashSet;
+use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 
 #[derive(
     Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, serde::Deserialize, serde::Serialize,
 )]
 pub struct ImageRef(pub String);
+
+impl Display for ImageRef {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 impl Deref for ImageRef {
     type Target = String;

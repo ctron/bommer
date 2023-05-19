@@ -35,7 +35,8 @@ impl BombasticSource {
             .get(self.url.join("/api/v1/sbom")?)
             .query(&[("purl", purl.to_string())])
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
 
         Ok(SBOM {
             data: response.text().await?,
