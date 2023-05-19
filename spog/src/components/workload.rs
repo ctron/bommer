@@ -46,9 +46,9 @@ impl TableEntryRenderer for WorkloadEntry {
 pub fn workload_table(props: &WorkloadTableProperties) -> Html {
     let header = html_nested!(
         <TableHeader>
-            <TableColumn label="Image"/>
-            <TableColumn label="Pods"/>
-            <TableColumn label="SBOM"/>
+            <TableColumn label="Image" width={ColumnWidth::Percent(80)} />
+            <TableColumn label="Pods" width={ColumnWidth::Percent(5)}   />
+            <TableColumn label="SBOM" width={ColumnWidth::Percent(10)}  />
         </TableHeader>
     );
 

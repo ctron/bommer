@@ -1,7 +1,10 @@
+mod ws;
+
 use crate::bombastic::Map;
 use actix_cors::Cors;
-use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use std::collections::HashMap;
+use tokio::task::spawn_local;
 
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
@@ -11,6 +14,18 @@ pub struct ServerConfig {
 #[get("/api/v1/workload")]
 async fn get_workload(map: web::Data<Map>) -> impl Responder {
     HttpResponse::Ok().json(map.get_state().await.into_iter().collect::<HashMap<_, _>>())
+}
+
+#[get("/api/v1/workload_stream")]
+pub async fn workload_stream(
+    req: HttpRequest,
+    stream: web::Payload,
+    map: web::Data<Map>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let (res, session, msg_stream) = actix_ws::handle(&req, stream)?;
+    let subscription = map.subscribe(32).await;
+    spawn_local(ws::run(subscription, session, msg_stream));
+    Ok(res)
 }
 
 /*
@@ -35,6 +50,7 @@ pub async fn run(config: ServerConfig, map: Map) -> anyhow::Result<()> {
             .app_data(map.clone())
             .wrap(cors)
             .service(get_workload)
+            .service(workload_stream)
         //.service(get_containers_ns)
     })
     .bind(&config.bind_addr)?

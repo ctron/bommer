@@ -1,7 +1,7 @@
-use crate::pubsub::{Event, Output, State};
+use crate::pubsub::{Output, State};
 use crate::store::Store;
 use anyhow::bail;
-use bommer_api::data::{Image, ImageRef, PodRef, SbomState, SBOM};
+use bommer_api::data::{Event, Image, ImageRef, PodRef, SbomState, SBOM};
 use futures::FutureExt;
 use packageurl::PackageUrl;
 use std::future::Future;

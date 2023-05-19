@@ -22,3 +22,18 @@ pub enum Error {
     #[error("Failed to request: {0}")]
     Request(#[from] reqwest::Error),
 }
+
+pub trait IntoWs {
+    fn into_ws(self) -> Url;
+}
+
+impl IntoWs for Url {
+    fn into_ws(mut self) -> Url {
+        if self.scheme() == "http" {
+            let _ = self.set_scheme("ws");
+        } else {
+            let _ = self.set_scheme("wss");
+        }
+        self
+    }
+}

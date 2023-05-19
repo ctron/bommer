@@ -1,5 +1,6 @@
-use std::collections::HashSet;
-use std::fmt::{Display, Formatter};
+use std::collections::{HashMap, HashSet};
+use std::fmt::{Debug, Display, Formatter};
+use std::hash::Hash;
 use std::ops::Deref;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -46,7 +47,7 @@ pub struct ImageRef(pub String);
 
 impl Display for ImageRef {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        Display::fmt(&self.0, f)
     }
 }
 
@@ -56,4 +57,17 @@ impl Deref for ImageRef {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Event<K, V>
+where
+    K: Clone + Debug + Eq + Hash,
+    V: Clone + Debug,
+{
+    Added(K, V),
+    Modified(K, V),
+    Removed(K),
+    Restart(HashMap<K, V>),
 }
