@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             loop {
                 info!("Starting event stream");
-                let mut sub = store.subscribe().await;
+                let mut sub = store.subscribe(16).await;
                 while let Some(evt) = sub.recv().await {
                     info!("Event: {evt:?}");
                 }
@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             loop {
                 info!("Starting SBOM stream");
-                let mut sub = map.subscribe().await;
+                let mut sub = map.subscribe(16).await;
                 while let Some(evt) = sub.recv().await {
                     info!("Event: {evt:?}");
                 }

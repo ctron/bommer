@@ -100,8 +100,9 @@ async fn scanner(map: Map, source: BombasticSource) -> anyhow::Result<()> {
 
     loop {
         info!("Starting subscription ... ");
-        let mut sub = map.subscribe().await;
+        let mut sub = map.subscribe(128).await;
         while let Some(evt) = sub.recv().await {
+            // FIXME: need to parallelize processing
             match evt {
                 Event::Added(image, state) | Event::Modified(image, state) => {
                     if let SbomState::Scheduled = state.sbom {
@@ -127,7 +128,7 @@ async fn scanner(map: Map, source: BombasticSource) -> anyhow::Result<()> {
 
 async fn runner(store: Store<ImageRef, PodRef, ()>, map: Map) -> anyhow::Result<()> {
     loop {
-        let mut sub = store.subscribe().await;
+        let mut sub = store.subscribe(32).await;
         while let Some(evt) = sub.recv().await {
             match evt {
                 Event::Added(image, state) | Event::Modified(image, state) => {

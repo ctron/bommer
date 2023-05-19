@@ -176,7 +176,10 @@ where
         self.inner.read().await.state.get_state().await
     }
 
-    pub async fn subscribe(&self) -> Subscription<K, Owned<O, V>> {
-        self.inner.read().await.state.subscribe().await
+    pub async fn subscribe(
+        &self,
+        buffer: impl Into<Option<usize>>,
+    ) -> Subscription<K, Owned<O, V>> {
+        self.inner.read().await.state.subscribe(buffer).await
     }
 }

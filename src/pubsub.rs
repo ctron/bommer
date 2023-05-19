@@ -138,8 +138,8 @@ where
     K: Clone + Debug + Eq + Hash + Send + Sync + 'static,
     V: Clone + Debug + PartialEq + Send + Sync + 'static,
 {
-    pub async fn subscribe(&self) -> Subscription<K, V> {
-        let (tx, rx) = mpsc::channel(16);
+    pub async fn subscribe(&self, buffer: impl Into<Option<usize>>) -> Subscription<K, V> {
+        let (tx, rx) = mpsc::channel(buffer.into().unwrap_or(16));
 
         let mut lock = self.inner.write().await;
 
