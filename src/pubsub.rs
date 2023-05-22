@@ -200,6 +200,14 @@ where
         }
     }
 
+    pub async fn remove_state(&self, key: K) {
+        let mut lock = self.inner.write().await;
+
+        if let Some(_) = lock.state.remove(&key) {
+            Inner::broadcast(&mut lock, Event::Removed(key.clone())).await;
+        }
+    }
+
     pub async fn iter_mut<F>(&self, f: F)
     where
         F: Fn(&K, &V) -> Output<V>,

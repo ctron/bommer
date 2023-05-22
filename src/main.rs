@@ -2,6 +2,7 @@ mod bombastic;
 mod pubsub;
 mod server;
 mod store;
+mod workload;
 
 use crate::bombastic::BombasticSource;
 use crate::server::ServerConfig;

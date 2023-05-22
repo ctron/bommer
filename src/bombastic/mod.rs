@@ -1,35 +1,23 @@
-use crate::pubsub::{Output, State};
+mod client;
+
+pub use client::BombasticSource;
+
+use crate::pubsub::Output;
 use crate::store::Store;
+use crate::workload::WorkloadState;
 use anyhow::bail;
 use bommer_api::data::{Event, Image, ImageRef, PodRef, SbomState, SBOM};
 use futures::FutureExt;
 use packageurl::PackageUrl;
 use std::future::Future;
-use std::ops::Deref;
 use std::time::Duration;
 use tracing::{info, warn};
-
-mod client;
-pub use client::BombasticSource;
-
-#[derive(Clone, Debug, Default)]
-pub struct Map {
-    state: State<ImageRef, Image>,
-}
-
-impl Deref for Map {
-    type Target = State<ImageRef, Image>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.state
-    }
-}
 
 pub fn store(
     store: Store<ImageRef, PodRef, ()>,
     source: BombasticSource,
-) -> (Map, impl Future<Output = anyhow::Result<()>>) {
-    let map = Map::default();
+) -> (WorkloadState, impl Future<Output = anyhow::Result<()>>) {
+    let map = WorkloadState::default();
 
     (map.clone(), async move {
         let (result, _, _) = futures::future::select_all([
@@ -44,7 +32,7 @@ pub fn store(
 }
 
 struct Scanner {
-    map: Map,
+    map: WorkloadState,
     source: BombasticSource,
 }
 
@@ -80,7 +68,7 @@ impl Scanner {
 }
 
 /// directly scan incoming changes
-async fn scanner(map: Map, source: BombasticSource) -> anyhow::Result<()> {
+async fn scanner(map: WorkloadState, source: BombasticSource) -> anyhow::Result<()> {
     let scanner = Scanner {
         map: map.clone(),
         source,
@@ -115,7 +103,7 @@ async fn scanner(map: Map, source: BombasticSource) -> anyhow::Result<()> {
 }
 
 /// periodically re-scan changes
-async fn rescanner(map: Map) -> anyhow::Result<()> {
+async fn rescanner(map: WorkloadState) -> anyhow::Result<()> {
     loop {
         tokio::time::sleep(Duration::from_secs(15)).await;
 
@@ -131,45 +119,43 @@ async fn rescanner(map: Map) -> anyhow::Result<()> {
     }
 }
 
-async fn runner(store: Store<ImageRef, PodRef, ()>, map: Map) -> anyhow::Result<()> {
+async fn runner(store: Store<ImageRef, PodRef, ()>, map: WorkloadState) -> anyhow::Result<()> {
     loop {
         let mut sub = store.subscribe(32).await;
         while let Some(evt) = sub.recv().await {
             match evt {
                 Event::Added(image, state) | Event::Modified(image, state) => {
-                    map.state
-                        .mutate_state(image, |current| match current {
-                            Some(mut current) => {
-                                current.pods = state.owners;
-                                Some(current)
-                            }
-                            None => Some(Image {
-                                pods: state.owners,
-                                sbom: SbomState::Scheduled,
-                            }),
-                        })
-                        .await;
+                    map.mutate_state(image, |current| match current {
+                        Some(mut current) => {
+                            current.pods = state.owners;
+                            Some(current)
+                        }
+                        None => Some(Image {
+                            pods: state.owners,
+                            sbom: SbomState::Scheduled,
+                        }),
+                    })
+                    .await;
                 }
                 Event::Removed(image) => {
-                    map.state.mutate_state(image, |_| None).await;
+                    map.mutate_state(image, |_| None).await;
                 }
                 Event::Restart(state) => {
-                    map.state
-                        .set_state(
-                            state
-                                .into_iter()
-                                .map(|(k, v)| {
-                                    (
-                                        k,
-                                        Image {
-                                            pods: v.owners,
-                                            sbom: SbomState::Scheduled,
-                                        },
-                                    )
-                                })
-                                .collect(),
-                        )
-                        .await;
+                    map.set_state(
+                        state
+                            .into_iter()
+                            .map(|(k, v)| {
+                                (
+                                    k,
+                                    Image {
+                                        pods: v.owners,
+                                        sbom: SbomState::Scheduled,
+                                    },
+                                )
+                            })
+                            .collect(),
+                    )
+                    .await;
                 }
             }
         }

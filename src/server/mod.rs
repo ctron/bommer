@@ -1,6 +1,6 @@
 mod ws;
 
-use crate::bombastic::Map;
+use crate::workload::{by_ns, WorkloadState};
 use actix_cors::Cors;
 use actix_web::{get, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ pub struct ServerConfig {
 }
 
 #[get("/api/v1/workload")]
-async fn get_workload(map: web::Data<Map>) -> impl Responder {
+async fn get_workload(map: web::Data<WorkloadState>) -> impl Responder {
     HttpResponse::Ok().json(map.get_state().await.into_iter().collect::<HashMap<_, _>>())
 }
 
@@ -20,11 +20,33 @@ async fn get_workload(map: web::Data<Map>) -> impl Responder {
 pub async fn workload_stream(
     req: HttpRequest,
     stream: web::Payload,
-    map: web::Data<Map>,
+    map: web::Data<WorkloadState>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let (res, session, msg_stream) = actix_ws::handle(&req, stream)?;
     let subscription = map.subscribe(32).await;
     spawn_local(ws::run(subscription, session, msg_stream));
+    Ok(res)
+}
+
+#[get("/api/v1/workload_stream/{namespace}")]
+pub async fn workload_stream_ns(
+    req: HttpRequest,
+    stream: web::Payload,
+    map: web::Data<WorkloadState>,
+    path: web::Path<String>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let (workload, runner) = by_ns(&map, path.into_inner()).await;
+    let (res, session, msg_stream) = actix_ws::handle(&req, stream)?;
+    let subscription = workload.subscribe(32).await;
+
+    // run either of them to completion
+    spawn_local(async {
+        tokio::select! {
+            _ = ws::run(subscription, session, msg_stream) => {},
+            _ = runner => {},
+        }
+    });
+
     Ok(res)
 }
 
@@ -35,7 +57,7 @@ async fn get_containers_ns(path: web::Path<String>, store: web::Data<Store>) -> 
     HttpResponse::Ok().json(store.get_containers_ns(&ns).await)
 }*/
 
-pub async fn run(config: ServerConfig, map: Map) -> anyhow::Result<()> {
+pub async fn run(config: ServerConfig, map: WorkloadState) -> anyhow::Result<()> {
     let map = web::Data::new(map);
 
     HttpServer::new(move || {
@@ -51,6 +73,7 @@ pub async fn run(config: ServerConfig, map: Map) -> anyhow::Result<()> {
             .wrap(cors)
             .service(get_workload)
             .service(workload_stream)
+            .service(workload_stream_ns)
         //.service(get_containers_ns)
     })
     .bind(&config.bind_addr)?

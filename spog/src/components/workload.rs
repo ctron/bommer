@@ -18,15 +18,20 @@ pub struct WorkloadEntry {
 impl TableEntryRenderer for WorkloadEntry {
     fn render_cell(&self, context: &CellContext) -> Cell {
         match context.column {
-            0 => html!(self.id.to_string()),
-            1 => html!(self.state.pods.len()),
+            0 => html!(self.id.to_string()).into(),
+            1 => html!(self.state.pods.len()).into(),
             2 => match &self.state.sbom {
-                SbomState::Scheduled => html!("Retrieving…"),
-                SbomState::Missing => html!("Missing"),
-                SbomState::Err(err) => html!(format!("Failed ({err})")),
-                SbomState::Found(_) => html!("Found"),
+                SbomState::Scheduled => html!("Retrieving…").into(),
+                SbomState::Missing => html!("Missing").into(),
+                SbomState::Err(err) => Cell::new(html!(
+                    <Tooltip text={err.to_string()}>
+                        { format!("Failed ({err})") }
+                    </Tooltip>
+                ))
+                .text_modifier(TextModifier::Truncate),
+                SbomState::Found(_) => html!("Found").into(),
             },
-            _ => html!(),
+            _ => Default::default(),
         }
         .into()
     }
