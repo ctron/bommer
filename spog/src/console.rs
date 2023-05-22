@@ -19,6 +19,7 @@ pub fn console() -> Html {
                 <NavList>
                     <NavExpandable title="Home">
                         <NavRouterItem<AppRoute> to={AppRoute::Index}>{ "Overview" }</NavRouterItem<AppRoute>>
+                        <NavRouterItem<AppRoute> to={AppRoute::ByNamespace{namespace: Default::default()}} predicate={AppRoute::is_by_namespace}>{ "Workload" }</NavRouterItem<AppRoute>>
                     </NavExpandable>
                 </NavList>
             </Nav>
@@ -65,5 +66,8 @@ pub fn console() -> Html {
 fn render(route: AppRoute) -> Html {
     match route {
         AppRoute::Index => html!(<pages::Index/>),
+        AppRoute::ByNamespace { namespace } => {
+            html!(<pages::Workload {namespace}/>)
+        }
     }
 }

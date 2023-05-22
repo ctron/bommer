@@ -10,8 +10,8 @@ pub struct Backend {
 }
 
 impl Backend {
-    pub fn join(&self, input: &str) -> Result<Url, Error> {
-        Ok(self.url.join(input)?)
+    pub fn join(&self, input: impl AsRef<str>) -> Result<Url, Error> {
+        Ok(self.url.join(input.as_ref())?)
     }
 }
 
